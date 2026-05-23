@@ -32,14 +32,24 @@ class MiniatureBricks(inkex.EffectExtension):
             wall_node = nodes[0]
             windows = nodes[1:]
             
-            # Preprocess shapes: Convert to path and bake transformations for absolute coordinates
+            original_parent = wall_node.getparent()
+            
             if not isinstance(wall_node, inkex.PathElement):
-                wall_node = wall_node.to_path_element()
+                new_wall_node = wall_node.to_path_element()
+                # 2. Swap the old node for the new one in the SVG document
+                original_parent.replace(wall_node, new_wall_node)
+                wall_node = new_wall_node
+                
             wall_node.apply_transform()
+            
+            # Use 'original_parent' later for inserting your groups
+            parent = original_parent 
             
             for i, win in enumerate(windows):
                 if not isinstance(win, inkex.PathElement):
-                    windows[i] = win.to_path_element()
+                    new_win = win.to_path_element()
+                    win.getparent().replace(win, new_win)
+                    windows[i] = new_win
                 windows[i].apply_transform()
             
             bbox = wall_node.bounding_box()
@@ -50,7 +60,9 @@ class MiniatureBricks(inkex.EffectExtension):
             mask.set('maskUnits', 'userSpaceOnUse')
             self.svg.defs.append(mask)
             
-            wall_bg = wall_node.duplicate()
+            wall_bg = inkex.PathElement()
+            wall_bg.path = wall_node.path
+            wall_bg.transform = wall_node.transform
             wall_bg.style = {'fill': 'white', 'stroke': 'none'}
             mask.append(wall_bg)
             
@@ -67,12 +79,14 @@ class MiniatureBricks(inkex.EffectExtension):
                 win_bbox = win.bounding_box()
                 if not win_bbox: continue
                 
-                # Blackout mask: Expand the window shape outward by applying a thick stroke
-                black_hole = win.duplicate()
+                # 2. FIX: Create the 'black hole' mask manually
+                black_hole = inkex.PathElement()
+                black_hole.path = win.path
+                black_hole.transform = win.transform
                 black_hole.style = {
                     'fill': 'black', 
                     'stroke': 'black', 
-                    'stroke-width': str(w * 2.1), # Expand enough to hide wall bricks underneath
+                    'stroke-width': str(w * 2.1),
                     'stroke-linejoin': 'round'
                 }
                 mask.append(black_hole)
