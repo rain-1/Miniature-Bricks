@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import inkex
 import random
+import math
 from inkex import Group, Rectangle, PathElement
 
 class MiniatureBricks(inkex.EffectExtension):
@@ -31,6 +32,16 @@ class MiniatureBricks(inkex.EffectExtension):
             wall_node = nodes[0]
             windows = nodes[1:]
             
+            # Preprocess shapes: Convert to path and bake transformations for absolute coordinates
+            if not isinstance(wall_node, inkex.PathElement):
+                wall_node = wall_node.to_path_element()
+            wall_node.apply_transform()
+            
+            for i, win in enumerate(windows):
+                if not isinstance(win, inkex.PathElement):
+                    windows[i] = win.to_path_element()
+                windows[i].apply_transform()
+            
             bbox = wall_node.bounding_box()
             if not bbox: return
             
@@ -56,15 +67,18 @@ class MiniatureBricks(inkex.EffectExtension):
                 win_bbox = win.bounding_box()
                 if not win_bbox: continue
                 
-                black_hole = Rectangle()
-                black_hole.set('x', str(win_bbox.left - h))
-                black_hole.set('y', str(win_bbox.top - w))
-                black_hole.set('width', str(win_bbox.width + 2*h))
-                black_hole.set('height', str(win_bbox.height + w + h))
-                black_hole.style = {'fill': 'black', 'stroke': 'none'}
+                # Blackout mask: Expand the window shape outward by applying a thick stroke
+                black_hole = win.duplicate()
+                black_hole.style = {
+                    'fill': 'black', 
+                    'stroke': 'black', 
+                    'stroke-width': str(w * 2.1), # Expand enough to hide wall bricks underneath
+                    'stroke-linejoin': 'round'
+                }
                 mask.append(black_hole)
                 
-                self.generate_window_frame(frame_group, win_bbox, w, h, gap, style)
+                # Generate the curved path frame
+                self.generate_path_frame(frame_group, win, w, h, gap, style)
                 
             parent = wall_node.getparent()
             parent.insert(parent.index(wall_node) + 1, brick_group)
@@ -130,33 +144,94 @@ class MiniatureBricks(inkex.EffectExtension):
                         self.add_brick(parent, x, y, header_w, h, style)
                         x += header_w + gap
 
-    def generate_window_frame(self, parent, bbox, w, h, gap, style):
-        curr_x = bbox.left - h
-        while curr_x < bbox.right + h:
-            bw = h
-            if curr_x + bw > bbox.right + h: bw = (bbox.right + h) - curr_x
-            self.add_brick(parent, curr_x, bbox.top - w, bw, w, style)
-            curr_x += h + gap
+    def generate_path_frame(self, parent, path_node, w, h, gap, style):
+        path_obj = path_node.path
+        
+        # Calculate total perimeter length
+        total_len = 0.0
+        for cmd in path_obj:
+            try: total_len += cmd.length()
+            except: pass
             
-        curr_x = bbox.left - h
-        while curr_x < bbox.right + h:
-            bw = h
-            if curr_x + bw > bbox.right + h: bw = (bbox.right + h) - curr_x
-            self.add_brick(parent, curr_x, bbox.bottom, bw, h, style)
-            curr_x += h + gap
+        if total_len <= 0: return
+        
+        # Calculate perfect brick spacing along the path
+        num_bricks = int(total_len / (h + gap))
+        if num_bricks < 1: return
+        step = total_len / num_bricks
+        bw = step - gap
+        bh = w  # Bricks point outward, so height equals the brick length
+        
+        win_bbox = path_node.bounding_box()
+        cx, cy = win_bbox.center.x, win_bbox.center.y
+        
+        for i in range(num_bricks):
+            l = i * step + step / 2.0
+            p, dx, dy = self.get_point_and_tangent(path_obj, l)
             
-        curr_y = bbox.top
-        while curr_y < bbox.bottom:
-            bh = h
-            if curr_y + bh > bbox.bottom: bh = bbox.bottom - curr_y
-            self.add_brick(parent, bbox.left - h, curr_y, h, bh, style)
-            self.add_brick(parent, bbox.right, curr_y, h, bh, style)
-            curr_y += h + gap
+            # Normalize tangent
+            mag = math.hypot(dx, dy)
+            if mag == 0: tx, ty = 1, 0
+            else: tx, ty = dx/mag, dy/mag
+                
+            # Normal vector (90 degrees clockwise)
+            nx, ny = -ty, tx
+            
+            # Ensure normal points OUTWARD away from the window center
+            vx, vy = p[0] - cx, p[1] - cy
+            if (nx * vx + ny * vy) < 0:
+                nx, ny = -nx, -ny
+                
+            # Position the brick outward from the edge
+            c_x = p[0] + nx * (bh / 2.0)
+            c_y = p[1] + ny * (bh / 2.0)
+            
+            # Rotation aligns the brick tangentially
+            angle_deg = math.degrees(math.atan2(ty, tx))
+            transform = f"translate({c_x}, {c_y}) rotate({angle_deg})"
+            
+            # Draw the brick centered at (0,0) so the transform pivots correctly
+            self.add_brick(parent, -bw/2, -bh/2, bw, bh, style, transform=transform)
 
-    def add_brick(self, parent, x, y, width, height, style):
+    def get_point_and_tangent(self, path_obj, l):
+        current_len = 0.0
+        
+        def get_c(pt):
+            if isinstance(pt, complex): return pt.real, pt.imag
+            elif hasattr(pt, 'x'): return pt.x, pt.y
+            else: return pt[0], pt[1]
+
+        for cmd in path_obj:
+            try: cmd_len = cmd.length()
+            except: cmd_len = 0.0
+                
+            if cmd_len > 0 and (current_len + cmd_len >= l or cmd == path_obj[-1]):
+                t = (l - current_len) / cmd_len
+                t = max(0.0, min(1.0, t))
+                
+                p = get_c(cmd.point_at(t))
+                p1 = get_c(cmd.point_at(max(0.0, t - 0.01)))
+                p2 = get_c(cmd.point_at(min(1.0, t + 0.01)))
+                
+                dx = p2[0] - p1[0]
+                dy = p2[1] - p1[1]
+                
+                # Fallback for straight lines where 0.01 offset might be too small
+                if dx == 0 and dy == 0:
+                    p_start = get_c(cmd.point_at(0.0))
+                    p_end = get_c(cmd.point_at(1.0))
+                    dx = p_end[0] - p_start[0]
+                    dy = p_end[1] - p_start[1]
+                    
+                return p, dx, dy
+            current_len += cmd_len
+            
+        last_p = get_c(path_obj[-1].point_at(1.0))
+        return last_p, 1.0, 0.0
+
+    def add_brick(self, parent, x, y, width, height, style, transform=None):
         imp = self.options.imperfection
         
-        # If no weathering is applied, use standard rectangles for file efficiency
         if imp <= 0.001:
             rect = Rectangle()
             rect.set('x', str(x))
@@ -164,14 +239,13 @@ class MiniatureBricks(inkex.EffectExtension):
             rect.set('width', str(width))
             rect.set('height', str(height))
             rect.style = style
+            if transform: rect.set('transform', transform)
             parent.append(rect)
             return
 
-        # Cap the maximum imperfection at 40% of the brick's size so it doesn't self-intersect
         max_x_chip = width * 0.4
         max_y_chip = height * 0.4
 
-        # Generate 8 random offsets (2 for each of the 4 corners)
         dx1 = min(random.uniform(0, imp), max_x_chip)
         dy1 = min(random.uniform(0, imp), max_y_chip)
         dx2 = min(random.uniform(0, imp), max_x_chip)
@@ -181,32 +255,29 @@ class MiniatureBricks(inkex.EffectExtension):
         dx4 = min(random.uniform(0, imp), max_x_chip)
         dy4 = min(random.uniform(0, imp), max_y_chip)
 
-        # Randomly choose if a corner is CHIPPED (Line) or TUMBLED (Quadratic Bezier)
         def corner_cmd(c_x, c_y, e_x, e_y):
             if random.random() > 0.5:
-                # Quadratic Bezier: uses the original sharp corner as the control point for a smooth curve
                 return f"Q {c_x},{c_y} {e_x},{e_y}"
             else:
-                # Straight line: creates a sharp, chipped chamfer cut
                 return f"L {e_x},{e_y}"
 
-        # Draw the custom brick path
         path_data = [
-            f"M {x+dx1},{y}",                                      # Top-Left start
-            f"L {x+width-dx2},{y}",                                # Top edge
-            corner_cmd(x+width, y, x+width, y+dy2),                # Top-Right corner
-            f"L {x+width},{y+height-dy3}",                         # Right edge
-            corner_cmd(x+width, y+height, x+width-dx3, y+height),  # Bottom-Right corner
-            f"L {x+dx4},{y+height}",                               # Bottom edge
-            corner_cmd(x, y+height, x, y+height-dy4),              # Bottom-Left corner
-            f"L {x},{y+dy1}",                                      # Left edge
-            corner_cmd(x, y, x+dx1, y),                            # Top-Left corner (closing)
+            f"M {x+dx1},{y}",
+            f"L {x+width-dx2},{y}",
+            corner_cmd(x+width, y, x+width, y+dy2),
+            f"L {x+width},{y+height-dy3}",
+            corner_cmd(x+width, y+height, x+width-dx3, y+height),
+            f"L {x+dx4},{y+height}",
+            corner_cmd(x, y+height, x, y+height-dy4),
+            f"L {x},{y+dy1}",
+            corner_cmd(x, y, x+dx1, y),
             "Z"
         ]
         
         elem = PathElement()
         elem.set('d', ' '.join(path_data))
         elem.style = style
+        if transform: elem.set('transform', transform)
         parent.append(elem)
 
 if __name__ == '__main__':
