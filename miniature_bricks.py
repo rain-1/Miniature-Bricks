@@ -58,6 +58,7 @@ class MiniatureBricks(inkex.EffectExtension):
             mask = inkex.Mask()
             mask.set('id', self.svg.get_unique_id('wall_mask'))
             mask.set('maskUnits', 'userSpaceOnUse')
+            mask.set('maskContentUnits', 'userSpaceOnUse')
             self.svg.defs.append(mask)
             
             wall_bg = inkex.PathElement()
@@ -225,6 +226,16 @@ class MiniatureBricks(inkex.EffectExtension):
                     return x1 + factor * (x2 - x1), y1 + factor * (y2 - y1)
             return lut[-1][1], lut[-1][2]
 
+
+        def get_lut_point_wrapped(length):
+            if total_len <= 0:
+                return lut[0][1], lut[0][2]
+            while length < 0.0:
+                length += total_len
+            while length > total_len:
+                length -= total_len
+            return get_lut_point(length)
+
         # 1. Chunk the path into "Bottom" (flat) vs "Arch/Sides" (soldier) segments
         segments = []
         current_segment = []
@@ -247,6 +258,13 @@ class MiniatureBricks(inkex.EffectExtension):
 
         if current_segment:
             segments.append({'is_bottom': is_current_bottom, 'pts': current_segment})
+
+        # Closed paths can split the bottom run at the LUT seam.
+        # Merge first/last segments when they are the same type.
+        if len(segments) > 1 and segments[0]['is_bottom'] == segments[-1]['is_bottom']:
+            wrapped_first = [(l + total_len, x, y) for (l, x, y) in segments[0]['pts']]
+            merged_pts = segments[-1]['pts'] + wrapped_first
+            segments = [{'is_bottom': segments[0]['is_bottom'], 'pts': merged_pts}] + segments[1:-1]
 
         # 2. Iterate through each architectural segment
         for seg in segments:
@@ -275,9 +293,9 @@ class MiniatureBricks(inkex.EffectExtension):
                 l = seg_start_l + i * step + step / 2.0
                 
                 # Check tangent trajectory
-                x1, y1 = get_lut_point(max(0.0, l - 1.0))
-                x2, y2 = get_lut_point(min(total_len, l + 1.0))
-                cx_brick, cy_brick = get_lut_point(l)
+                x1, y1 = get_lut_point_wrapped(l - 1.0)
+                x2, y2 = get_lut_point_wrapped(l + 1.0)
+                cx_brick, cy_brick = get_lut_point_wrapped(l)
                 
                 dx = x2 - x1
                 dy = y2 - y1
@@ -302,12 +320,13 @@ class MiniatureBricks(inkex.EffectExtension):
                 self.add_brick(parent, -bw_actual/2, -bh_actual/2, bw_actual, bh_actual, style, transform=transform)
 
                 # Draw the Conformal Blackout Mask Block
-                # We make it slightly larger (+0.5mm) to perfectly cover mortar gaps
+                # Make the blackout slightly oversized to avoid hairline leaks at segment joins
+                overscan = 1.0
                 rect = Rectangle()
-                rect.set('x', str(-(step + 0.5)/2))
-                rect.set('y', str(-(bh_actual + 0.5)/2))
-                rect.set('width', str(step + 0.5))
-                rect.set('height', str(bh_actual + 0.5))
+                rect.set('x', str(-(step + overscan)/2))
+                rect.set('y', str(-(bh_actual + overscan)/2))
+                rect.set('width', str(step + overscan))
+                rect.set('height', str(bh_actual + overscan))
                 rect.style = {'fill': 'black', 'stroke': 'none'}
                 rect.set('transform', transform)
                 mask_parent.append(rect)
