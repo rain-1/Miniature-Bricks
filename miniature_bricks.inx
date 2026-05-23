@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+    <name>Miniature Brick Wall</name>
+    <id>com.yourname.miniature_bricks</id>
+
+    <param name="brick_width" type="float" min="1.0" max="100.0" gui-text="Brick Width (mm)">10.0</param>
+    <param name="brick_height" type="float" min="1.0" max="100.0" gui-text="Brick Height (mm)">3.0</param>
+    <param name="mortar_gap" type="float" min="0.0" max="10.0" gui-text="Mortar Gap (mm)">0.5</param>
+    
+    <param name="pattern" type="optiongroup" appearance="combo" gui-text="Bond Pattern">
+        <option value="running">Running Bond</option>
+        <option value="flemish">Flemish Bond</option>
+        <option value="english">English Bond</option>
+    </param>
+
+    <param name="enable_frames" type="boolean" gui-text="Enable Window Logic (Select 1 Wall + Window Shapes)">false</param>
+
+    <effect>
+        <object-type>path</object-type>
+        <effects-menu>
+            <submenu name="Miniatures"/>
+        </effects-menu>
+    </effect>
+    
+    <script>
+        <command location="inx" interpreter="python">miniature_bricks.py</command>
+    </script>
+</inkscape-extension>
