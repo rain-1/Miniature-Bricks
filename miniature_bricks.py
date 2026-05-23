@@ -79,20 +79,15 @@ class MiniatureBricks(inkex.EffectExtension):
                 win_bbox = win.bounding_box()
                 if not win_bbox: continue
                 
-                # 2. FIX: Create the 'black hole' mask manually
-                black_hole = inkex.PathElement()
-                black_hole.path = win.path
-                black_hole.transform = win.transform
-                black_hole.style = {
-                    'fill': 'black', 
-                    'stroke': 'black', 
-                    'stroke-width': str(w * 2.1),
-                    'stroke-linejoin': 'round'
-                }
-                mask.append(black_hole)
+                # Mask out strictly the interior of the window opening
+                win_hole = inkex.PathElement()
+                win_hole.path = win.path
+                win_hole.transform = win.transform
+                win_hole.style = {'fill': 'black', 'stroke': 'none'}
+                mask.append(win_hole)
                 
-                # Generate the curved path frame
-                self.generate_path_frame(frame_group, win, w, h, gap, style)
+                # Generate the curved path frame AND its dynamic conformal mask
+                self.generate_path_frame(frame_group, mask, win, w, h, gap, style)
                 
             parent = wall_node.getparent()
             parent.insert(parent.index(wall_node) + 1, brick_group)
@@ -205,20 +200,12 @@ class MiniatureBricks(inkex.EffectExtension):
                     
         return lut, total_len
 
-    def generate_path_frame(self, parent, path_node, w, h, gap, style):
-        # 1. Build the mathematical path
+    def generate_path_frame(self, parent, mask_parent, path_node, w, h, gap, style):
         lut, total_len = self.build_lut_from_node(path_node)
         
         if total_len <= 0 or not lut:
             return
             
-        # 2. Calculate perfect brick spacing along the path
-        num_bricks = int(total_len / (h + gap))
-        if num_bricks < 1: return
-        step = total_len / num_bricks
-        bw = step - gap
-        bh = w 
-        
         win_bbox = path_node.bounding_box()
         cx, cy = win_bbox.center.x, win_bbox.center.y
         
@@ -232,36 +219,93 @@ class MiniatureBricks(inkex.EffectExtension):
                     factor = (length - l1) / (l2 - l1)
                     return x1 + factor * (x2 - x1), y1 + factor * (y2 - y1)
             return lut[-1][1], lut[-1][2]
+
+        # 1. Chunk the path into "Bottom" (flat) vs "Arch/Sides" (soldier) segments
+        segments = []
+        current_segment = []
+        is_current_bottom = None
+
+        for pt in lut:
+            l, px, py = pt
+            # A point is on the "bottom" if it's within 1mm of the lowest point of the shape
+            on_bottom = abs(py - win_bbox.bottom) <= 1.0
+
+            if is_current_bottom is None:
+                is_current_bottom = on_bottom
+
+            if on_bottom == is_current_bottom:
+                current_segment.append(pt)
+            else:
+                segments.append({'is_bottom': is_current_bottom, 'pts': current_segment})
+                current_segment = [pt]
+                is_current_bottom = on_bottom
+
+        if current_segment:
+            segments.append({'is_bottom': is_current_bottom, 'pts': current_segment})
+
+        # 2. Iterate through each architectural segment
+        for seg in segments:
+            if len(seg['pts']) < 2: continue
             
-        for i in range(num_bricks):
-            l = i * step + step / 2.0
+            seg_start_l = seg['pts'][0][0]
+            seg_end_l = seg['pts'][-1][0]
+            seg_len = seg_end_l - seg_start_l
             
-            # Look 1mm forward and backward to get a highly stable tangent angle
-            x1, y1 = get_lut_point(max(0.0, l - 1.0))
-            x2, y2 = get_lut_point(min(total_len, l + 1.0))
-            cx_brick, cy_brick = get_lut_point(l)
+            if seg_len <= 0.1: continue
             
-            dx = x2 - x1
-            dy = y2 - y1
-            mag = math.hypot(dx, dy)
-            if mag == 0: tx, ty = 1, 0
-            else: tx, ty = dx/mag, dy/mag
+            if seg['is_bottom']:
+                # Bottom threshold/sill: Bricks lay flat (length w, thickness h)
+                num_bricks = max(1, int(round(seg_len / (w + gap))))
+                step = seg_len / num_bricks
+                bh_actual = h
+            else:
+                # Arches and jambs: Bricks stand radially (length h, thickness w)
+                num_bricks = max(1, int(round(seg_len / (h + gap))))
+                step = seg_len / num_bricks
+                bh_actual = w
                 
-            # Normal vector (90 degrees clockwise)
-            nx, ny = -ty, tx
+            bw_actual = step - gap
             
-            # Ensure normal points OUTWARD away from the window center
-            vx, vy = cx_brick - cx, cy_brick - cy
-            if (nx * vx + ny * vy) < 0:
-                nx, ny = -nx, -ny
+            for i in range(num_bricks):
+                l = seg_start_l + i * step + step / 2.0
                 
-            c_x = cx_brick + nx * (bh / 2.0)
-            c_y = cy_brick + ny * (bh / 2.0)
-            
-            angle_deg = math.degrees(math.atan2(ty, tx))
-            transform = f"translate({c_x}, {c_y}) rotate({angle_deg})"
-            
-            self.add_brick(parent, -bw/2, -bh/2, bw, bh, style, transform=transform)
+                # Check tangent trajectory
+                x1, y1 = get_lut_point(max(0.0, l - 1.0))
+                x2, y2 = get_lut_point(min(total_len, l + 1.0))
+                cx_brick, cy_brick = get_lut_point(l)
+                
+                dx = x2 - x1
+                dy = y2 - y1
+                mag = math.hypot(dx, dy)
+                if mag == 0: tx, ty = 1, 0
+                else: tx, ty = dx/mag, dy/mag
+                    
+                nx, ny = -ty, tx
+                
+                # Normal must point outward away from the center cutout
+                vx, vy = cx_brick - cx, cy_brick - cy
+                if (nx * vx + ny * vy) < 0:
+                    nx, ny = -nx, -ny
+                    
+                c_x = cx_brick + nx * (bh_actual / 2.0)
+                c_y = cy_brick + ny * (bh_actual / 2.0)
+                
+                angle_deg = math.degrees(math.atan2(ty, tx))
+                transform = f"translate({c_x}, {c_y}) rotate({angle_deg})"
+                
+                # Draw the visible weathered brick
+                self.add_brick(parent, -bw_actual/2, -bh_actual/2, bw_actual, bh_actual, style, transform=transform)
+
+                # Draw the Conformal Blackout Mask Block
+                # We make it slightly larger (+0.5mm) to perfectly cover mortar gaps
+                rect = Rectangle()
+                rect.set('x', str(-(step + 0.5)/2))
+                rect.set('y', str(-(bh_actual + 0.5)/2))
+                rect.set('width', str(step + 0.5))
+                rect.set('height', str(bh_actual + 0.5))
+                rect.style = {'fill': 'black', 'stroke': 'none'}
+                rect.set('transform', transform)
+                mask_parent.append(rect)
 
 
     def add_brick(self, parent, x, y, width, height, style, transform=None):
