@@ -58,6 +58,7 @@ class MiniatureBricks(inkex.EffectExtension):
             mask = inkex.Mask()
             mask.set('id', self.svg.get_unique_id('wall_mask'))
             mask.set('maskUnits', 'userSpaceOnUse')
+            mask.set('maskContentUnits', 'userSpaceOnUse')
             self.svg.defs.append(mask)
             
             wall_bg = inkex.PathElement()
