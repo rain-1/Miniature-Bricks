@@ -6,6 +6,7 @@
     <param name="brick_width" type="float" min="1.0" max="100.0" gui-text="Brick Width (mm)">10.0</param>
     <param name="brick_height" type="float" min="1.0" max="100.0" gui-text="Brick Height (mm)">3.0</param>
     <param name="mortar_gap" type="float" min="0.0" max="10.0" gui-text="Mortar Gap (mm)">0.5</param>
+    <param name="imperfection" type="float" min="0.0" max="5.0" gui-text="Weathering/Imperfection (mm)">0.4</param>
     
     <param name="pattern" type="optiongroup" appearance="combo" gui-text="Bond Pattern">
         <option value="running">Running Bond</option>
