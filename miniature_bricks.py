@@ -79,11 +79,17 @@ class MiniatureBricks(inkex.EffectExtension):
                 win_bbox = win.bounding_box()
                 if not win_bbox: continue
                 
-                # Mask out strictly the interior of the window opening
+                # Mask out the interior of the window opening with a tiny 0.5mm expansion
+                # to flawlessly seal the gap under the frame bricks
                 win_hole = inkex.PathElement()
                 win_hole.path = win.path
                 win_hole.transform = win.transform
-                win_hole.style = {'fill': 'black', 'stroke': 'none'}
+                win_hole.style = {
+                    'fill': 'black', 
+                    'stroke': 'black', 
+                    'stroke-width': '0.5', 
+                    'stroke-linejoin': 'round'
+                }
                 mask.append(win_hole)
                 
                 # Generate the curved path frame AND its dynamic conformal mask
