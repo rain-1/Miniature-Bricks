@@ -79,20 +79,19 @@ class MiniatureBricks(inkex.EffectExtension):
                 win_bbox = win.bounding_box()
                 if not win_bbox: continue
                 
-                # Mask out the interior of the window opening with a tiny 0.5mm expansion
-                # to flawlessly seal the gap under the frame bricks
-                win_hole = inkex.PathElement()
-                win_hole.path = win.path
-                win_hole.transform = win.transform
-                win_hole.style = {
+                # Restore the clean, thick blackout mask
+                black_hole = inkex.PathElement()
+                black_hole.path = win.path
+                black_hole.transform = win.transform
+                black_hole.style = {
                     'fill': 'black', 
                     'stroke': 'black', 
-                    'stroke-width': '0.5', 
+                    'stroke-width': str(w * 2.1), # Expands outward to perfectly hide wall bricks
                     'stroke-linejoin': 'round'
                 }
-                mask.append(win_hole)
+                mask.append(black_hole)
                 
-                # Generate the curved path frame AND its dynamic conformal mask
+                # Generate the curved path frame
                 self.generate_path_frame(frame_group, mask, win, w, h, gap, style)
                 
             parent = wall_node.getparent()
