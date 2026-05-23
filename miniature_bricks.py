@@ -161,87 +161,87 @@ class MiniatureBricks(inkex.EffectExtension):
     def generate_path_frame(self, parent, path_node, w, h, gap, style):
         path_obj = path_node.path
         
-        # Calculate total perimeter length
+        # High-resolution sampling to build a reliable Arc-Length Look-Up Table (LUT)
+        steps = 1000
+        lut = []
         total_len = 0.0
-        for cmd in path_obj:
-            try: total_len += cmd.length()
-            except: pass
+        
+        try:
+            last_p = path_obj.point_at(0.0)
+            last_x, last_y = last_p.real, last_p.imag
+        except Exception:
+            return # Return early if the path is invalid or empty
             
+        lut.append((0.0, last_x, last_y))
+        
+        for s in range(1, steps + 1):
+            t = s / float(steps)
+            try:
+                p = path_obj.point_at(t)
+                cur_x, cur_y = p.real, p.imag
+                dist = math.hypot(cur_x - last_x, cur_y - last_y)
+                total_len += dist
+                lut.append((total_len, cur_x, cur_y))
+                last_x, last_y = cur_x, cur_y
+            except Exception:
+                pass
+                
         if total_len <= 0: return
         
-        # Calculate perfect brick spacing along the path
+        # Calculate perfect brick spacing along the path perimeter
         num_bricks = int(total_len / (h + gap))
         if num_bricks < 1: return
         step = total_len / num_bricks
-        bw = step - gap
-        bh = w  # Bricks point outward, so height equals the brick length
+        bw = step - gap  # Width of the brick wrapping along the curve
+        bh = w           # Length of the brick radiating outwards
         
         win_bbox = path_node.bounding_box()
         cx, cy = win_bbox.center.x, win_bbox.center.y
         
+        # Helper function to grab smooth interpolated coordinates from our LUT
+        def get_lut_point(length):
+            length = max(0.0, min(total_len, length))
+            for idx in range(len(lut) - 1):
+                if lut[idx+1][0] >= length:
+                    l1, x1, y1 = lut[idx]
+                    l2, x2, y2 = lut[idx+1]
+                    if l2 == l1: return x1, y1
+                    factor = (length - l1) / (l2 - l1)
+                    return x1 + factor * (x2 - x1), y1 + factor * (y2 - y1)
+            return lut[-1][1], lut[-1][2]
+            
         for i in range(num_bricks):
             l = i * step + step / 2.0
-            p, dx, dy = self.get_point_and_tangent(path_obj, l)
             
-            # Normalize tangent
+            # Sample points slightly before and after to get a precise directional tangent
+            x1, y1 = get_lut_point(max(0.0, l - 0.05))
+            x2, y2 = get_lut_point(min(total_len, l + 0.05))
+            cx_brick, cy_brick = get_lut_point(l)
+            
+            dx = x2 - x1
+            dy = y2 - y1
             mag = math.hypot(dx, dy)
             if mag == 0: tx, ty = 1, 0
             else: tx, ty = dx/mag, dy/mag
                 
-            # Normal vector (90 degrees clockwise)
+            # Normal vector (90 degrees clockwise) pointing out from the curve
             nx, ny = -ty, tx
             
-            # Ensure normal points OUTWARD away from the window center
-            vx, vy = p[0] - cx, p[1] - cy
+            # Double check that the normal vector points away from the window center
+            vx, vy = cx_brick - cx, cy_brick - cy
             if (nx * vx + ny * vy) < 0:
                 nx, ny = -nx, -ny
                 
-            # Position the brick outward from the edge
-            c_x = p[0] + nx * (bh / 2.0)
-            c_y = p[1] + ny * (bh / 2.0)
+            # Shift the brick center outward so it frames the window edge cleanly
+            c_x = cx_brick + nx * (bh / 2.0)
+            c_y = cy_brick + ny * (bh / 2.0)
             
-            # Rotation aligns the brick tangentially
             angle_deg = math.degrees(math.atan2(ty, tx))
             transform = f"translate({c_x}, {c_y}) rotate({angle_deg})"
             
-            # Draw the brick centered at (0,0) so the transform pivots correctly
+            # Build the brick centered at (0,0) so it scales and rotates cleanly
             self.add_brick(parent, -bw/2, -bh/2, bw, bh, style, transform=transform)
 
-    def get_point_and_tangent(self, path_obj, l):
-        current_len = 0.0
-        
-        def get_c(pt):
-            if isinstance(pt, complex): return pt.real, pt.imag
-            elif hasattr(pt, 'x'): return pt.x, pt.y
-            else: return pt[0], pt[1]
-
-        for cmd in path_obj:
-            try: cmd_len = cmd.length()
-            except: cmd_len = 0.0
-                
-            if cmd_len > 0 and (current_len + cmd_len >= l or cmd == path_obj[-1]):
-                t = (l - current_len) / cmd_len
-                t = max(0.0, min(1.0, t))
-                
-                p = get_c(cmd.point_at(t))
-                p1 = get_c(cmd.point_at(max(0.0, t - 0.01)))
-                p2 = get_c(cmd.point_at(min(1.0, t + 0.01)))
-                
-                dx = p2[0] - p1[0]
-                dy = p2[1] - p1[1]
-                
-                # Fallback for straight lines where 0.01 offset might be too small
-                if dx == 0 and dy == 0:
-                    p_start = get_c(cmd.point_at(0.0))
-                    p_end = get_c(cmd.point_at(1.0))
-                    dx = p_end[0] - p_start[0]
-                    dy = p_end[1] - p_start[1]
-                    
-                return p, dx, dy
-            current_len += cmd_len
-            
-        last_p = get_c(path_obj[-1].point_at(1.0))
-        return last_p, 1.0, 0.0
 
     def add_brick(self, parent, x, y, width, height, style, transform=None):
         imp = self.options.imperfection
