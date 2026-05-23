@@ -158,47 +158,70 @@ class MiniatureBricks(inkex.EffectExtension):
                         self.add_brick(parent, x, y, header_w, h, style)
                         x += header_w + gap
 
-    def generate_path_frame(self, parent, path_node, w, h, gap, style):
-        path_obj = path_node.path
-        
-        # High-resolution sampling to build a reliable Arc-Length Look-Up Table (LUT)
-        steps = 1000
+    def build_lut_from_node(self, path_node):
+        """Converts ANY Inkscape path into a pure mathematical Look-Up Table of coordinates"""
+        # Convert the path into a list of cubic bezier curves (works in all Inkscape versions)
+        csp = path_node.path.to_superpath()
         lut = []
         total_len = 0.0
         
-        try:
-            last_p = path_obj.point_at(0.0)
-            last_x, last_y = last_p.real, last_p.imag
-        except Exception:
-            return # Return early if the path is invalid or empty
+        for subpath in csp:
+            if len(subpath) < 2: continue
             
-        lut.append((0.0, last_x, last_y))
-        
-        for s in range(1, steps + 1):
-            t = s / float(steps)
-            try:
-                p = path_obj.point_at(t)
-                cur_x, cur_y = p.real, p.imag
-                dist = math.hypot(cur_x - last_x, cur_y - last_y)
-                total_len += dist
-                lut.append((total_len, cur_x, cur_y))
-                last_x, last_y = cur_x, cur_y
-            except Exception:
-                pass
+            sub_points = []
+            # Loop through the control points of the bezier curves
+            for i in range(len(subpath) - 1):
+                p0 = subpath[i][1]
+                h1 = subpath[i][2]
+                h2 = subpath[i+1][0]
+                p1 = subpath[i+1][1]
                 
-        if total_len <= 0: return
+                # Sample 20 points along each segment of the curve
+                steps = 20 
+                for s in range(steps):
+                    t = s / float(steps)
+                    mt = 1.0 - t
+                    # Standard Cubic Bezier formula
+                    x = (mt**3)*p0[0] + 3*(mt**2)*t*h1[0] + 3*mt*(t**2)*h2[0] + (t**3)*p1[0]
+                    y = (mt**3)*p0[1] + 3*(mt**2)*t*h1[1] + 3*mt*(t**2)*h2[1] + (t**3)*p1[1]
+                    sub_points.append((x, y))
+                    
+            sub_points.append((subpath[-1][1][0], subpath[-1][1][1]))
+            
+            if not lut:
+                lut.append((0.0, sub_points[0][0], sub_points[0][1]))
+                
+            last_x, last_y = lut[-1][1], lut[-1][2]
+            
+            # Map out the exact millimeter distances between all points
+            for pt in sub_points[1:]:
+                dx = pt[0] - last_x
+                dy = pt[1] - last_y
+                dist = math.hypot(dx, dy)
+                if dist > 0.001: # Avoid duplicate stacking points
+                    total_len += dist
+                    lut.append((total_len, pt[0], pt[1]))
+                    last_x, last_y = pt[0], pt[1]
+                    
+        return lut, total_len
+
+    def generate_path_frame(self, parent, path_node, w, h, gap, style):
+        # 1. Build the mathematical path
+        lut, total_len = self.build_lut_from_node(path_node)
         
-        # Calculate perfect brick spacing along the path perimeter
+        if total_len <= 0 or not lut:
+            return
+            
+        # 2. Calculate perfect brick spacing along the path
         num_bricks = int(total_len / (h + gap))
         if num_bricks < 1: return
         step = total_len / num_bricks
-        bw = step - gap  # Width of the brick wrapping along the curve
-        bh = w           # Length of the brick radiating outwards
+        bw = step - gap
+        bh = w 
         
         win_bbox = path_node.bounding_box()
         cx, cy = win_bbox.center.x, win_bbox.center.y
         
-        # Helper function to grab smooth interpolated coordinates from our LUT
         def get_lut_point(length):
             length = max(0.0, min(total_len, length))
             for idx in range(len(lut) - 1):
@@ -213,9 +236,9 @@ class MiniatureBricks(inkex.EffectExtension):
         for i in range(num_bricks):
             l = i * step + step / 2.0
             
-            # Sample points slightly before and after to get a precise directional tangent
-            x1, y1 = get_lut_point(max(0.0, l - 0.05))
-            x2, y2 = get_lut_point(min(total_len, l + 0.05))
+            # Look 1mm forward and backward to get a highly stable tangent angle
+            x1, y1 = get_lut_point(max(0.0, l - 1.0))
+            x2, y2 = get_lut_point(min(total_len, l + 1.0))
             cx_brick, cy_brick = get_lut_point(l)
             
             dx = x2 - x1
@@ -224,22 +247,20 @@ class MiniatureBricks(inkex.EffectExtension):
             if mag == 0: tx, ty = 1, 0
             else: tx, ty = dx/mag, dy/mag
                 
-            # Normal vector (90 degrees clockwise) pointing out from the curve
+            # Normal vector (90 degrees clockwise)
             nx, ny = -ty, tx
             
-            # Double check that the normal vector points away from the window center
+            # Ensure normal points OUTWARD away from the window center
             vx, vy = cx_brick - cx, cy_brick - cy
             if (nx * vx + ny * vy) < 0:
                 nx, ny = -nx, -ny
                 
-            # Shift the brick center outward so it frames the window edge cleanly
             c_x = cx_brick + nx * (bh / 2.0)
             c_y = cy_brick + ny * (bh / 2.0)
             
             angle_deg = math.degrees(math.atan2(ty, tx))
             transform = f"translate({c_x}, {c_y}) rotate({angle_deg})"
             
-            # Build the brick centered at (0,0) so it scales and rotates cleanly
             self.add_brick(parent, -bw/2, -bh/2, bw, bh, style, transform=transform)
 
 
